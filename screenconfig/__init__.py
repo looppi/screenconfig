@@ -231,6 +231,18 @@ def get_commands(event, cmdlist):
     return []
 
 
+def get_active_display_amount():
+    wc = subprocess.Popen(['wc', '-l'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    wc_in = wc.stdin
+    grep_in = subprocess.Popen(['grep', ' connected'], stdin=subprocess.PIPE, stdout=wc_in).stdin
+    xrandr = subprocess.Popen(['xrandr', '--verbose'], stdout=grep_in).communicate()
+    wc_in.close()
+    grep_in.close()
+    val = wc.stdout.read()
+    val = int(val.decode().strip())
+    return val
+
+
 def activate_crtc(config, event, commands):
     monitor_config = get_mon_configuration_for_edid(config,
                                                     event.edid,
@@ -238,21 +250,26 @@ def activate_crtc(config, event, commands):
     if not monitor_config:
         return None
 
-    xrandr_cmd = ['xrandr', '--output', event.output]
-    resolution = monitor_config.resolution
-    if not resolution or resolution == 'auto':
-        xrandr_cmd.append('--auto')
+    active_connections = get_active_display_amount()
+    if active_connections > 1 and monitor_config.off_when_other_connected:
+        xrandr_cmd = ['xrandr', '--output', event.output, '--off']
     else:
-        xrandr_cmd.extend(('--mode', resolution))
+        xrandr_cmd = ['xrandr', '--output', event.output]
+    
+        resolution = monitor_config.resolution
+        if not resolution or resolution == 'auto':
+            xrandr_cmd.append('--auto')
+        else:
+            xrandr_cmd.extend(('--mode', resolution))
 
-    if monitor_config.xrandr_args:
-        xrandr_cmd.extend(monitor_config.xrandr_args)
+        if monitor_config.xrandr_args:
+            xrandr_cmd.extend(monitor_config.xrandr_args)
 
-    if monitor_config.position and len(monitor_config.position) >= 2:
-        reference_output = find_reference_output(config,
-                                                 *monitor_config.position[1:3])
-        if reference_output and reference_output != event.output:
-            xrandr_cmd.extend((monitor_config.position[0], reference_output))
+        if monitor_config.position and len(monitor_config.position) >= 2:
+            reference_output = find_reference_output(config,
+                                                     *monitor_config.position[1:3])
+            if reference_output and reference_output != event.output:
+                xrandr_cmd.extend((monitor_config.position[0], reference_output))
 
     commands.append(xrandr_cmd)
     commands.extend(get_commands(event, monitor_config.exec_on_connect))
@@ -267,6 +284,12 @@ def deactivate_crtc(config, event, commands):
     commands.append(['xrandr', '--output', event.output, '--off'])
     if monitor_config:
         commands.extend(get_commands(event, monitor_config.exec_on_disconnect))
+
+    # if one screen left, it might be off
+    if get_active_display_amount() == 1:
+        # activate
+        commands.append(['xrandr', '--output', 'eDP-1-1', '--auto'])
+
     return config, event, commands
 
 
